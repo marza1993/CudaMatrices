@@ -513,9 +513,29 @@ bool CudaMatrix<T>::product(const CudaMatrix<T>& other, CudaMatrix& result)
 		return false;
 	}
 
-	cudaFree(d_A);
-	cudaFree(d_B);
-	cudaFree(d_C);
+	cudaStatus = cudaFree(d_A);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione della memoria sul device per d_A" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	cudaStatus = cudaFree(d_B);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione della memoria sul device per d_B" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	cudaStatus = cudaFree(d_C);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione della memoria sul device per d_C" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
 
 	return true;
 }
@@ -707,7 +727,7 @@ bool CudaMatrix<T>::computeSelfDistances(CudaMatrix<float>& Dist, CudaMatrix<uns
 	T* d_A;
 	float* d_Dist;
 	unsigned int* d_indiciBest;
-	//unsigned int* d_numberOfDoneBlocks;	// ---------------------------
+
 
 	// alloco la memoria su device
 	cudaError_t cudaStatus = cudaMalloc((void **)&d_A, sizeof(T) * rows * cols);
@@ -731,7 +751,7 @@ bool CudaMatrix<T>::computeSelfDistances(CudaMatrix<float>& Dist, CudaMatrix<uns
 		cout << string(cudaGetErrorString(cudaStatus)) << endl;
 		return false;
 	}
-	//cudaMalloc((void **)&d_numberOfDoneBlocks, sizeof(unsigned int) * rows);	// -----------------
+
 
 	// copio i dati su device
 	cudaStatus = cudaMemcpy((void *)d_A, this->getData(), sizeof(T) * rows * cols, cudaMemcpyHostToDevice);
@@ -741,7 +761,7 @@ bool CudaMatrix<T>::computeSelfDistances(CudaMatrix<float>& Dist, CudaMatrix<uns
 		cout << string(cudaGetErrorString(cudaStatus)) << endl;
 		return false;
 	}
-	//cudaMemset((void *)d_numberOfDoneBlocks, 0, sizeof(unsigned int) * rows);	// ------------------
+
 
 	// chiamo il kernel
 	// ************************************************************************************
@@ -751,7 +771,7 @@ bool CudaMatrix<T>::computeSelfDistances(CudaMatrix<float>& Dist, CudaMatrix<uns
 	int dimGriglia = ceil((float)rows / dimBlocco);
 	dim3 blocksPerGrid(dimGriglia, dimGriglia);
 
-	//cudaMatrixSelfDist << <blocksPerGrid, threadsPerBlock >> > (d_A, d_Dist, d_indiciBest, rows, cols, d_numberOfDoneBlocks);	// -------------------
+
 	selfDistShared << <blocksPerGrid, threadsPerBlock >> > (d_A, d_Dist, rows, cols);
 
 	cudaStatus = cudaGetLastError();
@@ -796,17 +816,29 @@ bool CudaMatrix<T>::computeSelfDistances(CudaMatrix<float>& Dist, CudaMatrix<uns
 	}
 
 
-	// ******** debug
-	//unsigned int* numberOfDoneBlocks = new unsigned int[rows];
-	//cudaMemcpy(numberOfDoneBlocks, d_numberOfDoneBlocks, sizeof(unsigned int) * rows, cudaMemcpyDeviceToHost);
-	//delete[] numberOfDoneBlocks;
-	// *************
+	cudaStatus = cudaFree(d_A);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_A" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
 
+	cudaStatus = cudaFree(d_Dist);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_Dist" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+	cudaStatus = cudaFree(d_indiciBest);
 
-	cudaFree(d_A);
-	cudaFree(d_Dist);
-	cudaFree(d_indiciBest);
-	//cudaFree(d_numberOfDoneBlocks);	// ------------------------
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_indiciBest" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
 
 	return true;
 }
