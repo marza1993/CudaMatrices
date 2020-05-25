@@ -272,13 +272,54 @@ void provaMatMult()
 
 }
 
+
+void provaCicloSelfDist()
+{
+	// per M = 37000 si pianta: fallisce l'allocazione sul device e dà errore "out of memory".
+	int N = 128;
+	for (int M = 5000; M < 60000; M += 1000)
+	{
+		cout << "*******************************" << endl;
+		cout << "M = " << M << endl;
+
+		float* data = new float[M * N];
+
+		for (int i = 0; i < M; i++)
+		{
+			for (int j = 0; j < N; j++)
+			{
+				data[i * N + j] = 135.7 * ((double)rand() / RAND_MAX); 
+			}
+		}
+
+		
+		CudaMatrix<float> descr(M, N, data);
+		CudaMatrix<float> Dist;
+		CudaMatrix<unsigned int> indici;
+
+		auto start = std::chrono::steady_clock::now();
+		if (!descr.computeSelfDistances(Dist, indici))
+		{
+			cout << "FALLITO!" << endl;
+			return;
+		}
+		auto end = std::chrono::steady_clock::now();
+		cout << "tempo impieato: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << std::endl;
+
+		delete[] data;
+
+	}
+}
+
 int main(int argc, char** argv)
 {
 
-	CudaMatrix<int>::printDeviceInfo();
+	//CudaMatrix<int>::printDeviceInfo();
 
-	provaDist();
+	//provaDist();
 	//provaMatMult();
+
+	provaCicloSelfDist();
 
 	return 0;
 }
