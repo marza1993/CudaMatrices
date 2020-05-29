@@ -11,6 +11,10 @@
 #include <sstream>
 
 
+template<class T>
+class CudaMatrixSimmetric;
+
+
 // classe wrapper di una matrice che permette di effettuare alcune operazioni in modo parallelo
 template <class T>
 class CUDAMATRIX_API CudaMatrix
@@ -29,7 +33,10 @@ public:
 
 	CudaMatrix()
 	{
-		//std::cout << "default constructor" << std::endl;
+
+#ifdef _DEBUG
+		std::cout << "default constructor" << std::endl;
+#endif
 		this->rows = 0;
 		this->cols = 0;
 	}
@@ -74,7 +81,7 @@ public:
 		}
 	}
 
-	void clearData()
+	virtual void clearData()
 	{
 
 #ifdef _DEBUG
@@ -92,7 +99,7 @@ public:
 		}
 	}
 
-	T& operator()(size_t i, size_t j)
+	virtual T& operator()(size_t i, size_t j)
 	{
 		if (i >= rows || j >= cols)
 		{
@@ -122,11 +129,13 @@ public:
 
 	bool computeSelfDistancesOld(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest);
 
-	bool computeSelfDistances(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest);
+	bool computeSelfDistancesNonSimm(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest);
+
+	bool computeSelfDistances(CudaMatrixSimmetric<float>& Dist, CudaMatrix<unsigned int>& indiciBest);
 
 	bool computeSelfDistancesCPU(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest);
 
-	void print(const std::string& nomeFile = "");
+	virtual void print(const std::string& nomeFile = "");
 
 	static void printDeviceInfo();
 
@@ -151,7 +160,7 @@ public:
 		return ownsData;
 	}
 
-	void setDimension(size_t rows, size_t cols)
+	virtual void setDimension(size_t rows, size_t cols)
 	{
 		// sarebbe meglio mettere un check su onwsdata??
 

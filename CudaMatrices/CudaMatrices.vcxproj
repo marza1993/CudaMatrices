@@ -11,10 +11,12 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="CudaMatrixSimmetric.cpp" />
     <ClCompile Include="dllmain.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CudaMatrix.h" />
+    <ClInclude Include="CudaMatrixSimmetric.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="CudaMatrix.cu" />

@@ -4,6 +4,7 @@
 #include "CudaMatrix.h"
 #include <iostream>
 #include <fstream>
+#include "CudaMatrixSimmetric.h"
 
 using namespace std;
 
@@ -227,6 +228,147 @@ void __global__  selfDistShared(const T* A, float* Dist, int M, int N)
 	}
 }
 
+
+
+
+template<class T>
+void __global__  selfDistSharedSimmetric(const T* A, float* Dist, int M, int N)
+{
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+
+	if (y < M || x < M)
+	{
+		// declare cache in the shared memory
+		__shared__ T As[blockD][blockD];
+		__shared__ T Bs[blockD][blockD];
+		T sum = 0;
+
+		// Loop sulle sotto-matrici (tiles)
+		int N_INTEGER_BLOCKS = floor(((float)N) / blockD);
+		for (int m = 0; m < N_INTEGER_BLOCKS; m++)
+		{
+			if (y < M)
+			{
+				As[threadIdx.y][threadIdx.x] = A[y * N + (m * blockD + threadIdx.x)];
+			}
+
+			if (x < M)
+			{
+				Bs[threadIdx.y][threadIdx.x] = A[x * N + (m * blockD + threadIdx.y)];
+			}
+
+			__syncthreads();
+
+			if (y < M && x < M)
+			{
+				// keep track of the running sum    
+				for (int k = 0; k < blockD; k++)
+				{
+					sum += (As[threadIdx.y][k] - Bs[k][threadIdx.x]) * (As[threadIdx.y][k] - Bs[k][threadIdx.x]);
+				}
+			}
+
+			__syncthreads();
+		}
+
+
+		// ultimo blocco
+		int DIM_LAST_BLOCK = N % blockD;
+
+		// NB: questo if serve solo per evitare di fare due syncthreads() inutili; se non ci fosse non sarebbe cmq scorretto ma sarebbe meno efficiente
+		if (DIM_LAST_BLOCK != 0)
+		{
+			if (threadIdx.x < DIM_LAST_BLOCK && y < M)
+			{
+				As[threadIdx.y][threadIdx.x] = A[y * N + (N_INTEGER_BLOCKS * blockD + threadIdx.x)];
+			}
+			if (threadIdx.y < DIM_LAST_BLOCK && x < M)
+			{
+				Bs[threadIdx.y][threadIdx.x] = A[x * N + (N_INTEGER_BLOCKS * blockD + threadIdx.y)];
+			}
+
+			__syncthreads();
+
+			if (y < M && x < M)
+			{
+				for (int k = 0; k < DIM_LAST_BLOCK; k++)
+				{
+					sum += (As[threadIdx.y][k] - Bs[k][threadIdx.x]) * (As[threadIdx.y][k] - Bs[k][threadIdx.x]);
+				}
+			}
+
+			__syncthreads();
+		}
+
+		if (y < M && x < M)
+		{
+			// write back to the global memory
+			if (y > x)
+			{
+				Dist[(y * (y + 1) / 2) + x] = sqrt((float)sum);
+			}
+			
+		}
+	}
+}
+
+
+template <class T>
+void __global__ cudaFindDistBest3Simmetric(const T* Dist, unsigned int* indiciBest, int M)
+{
+	int i = blockIdx.x*blockDim.x + threadIdx.x;
+
+	if (i < M)
+	{
+		float min[3] = { 1.e8, 1.e8, 1.e8 };
+
+		float kMin[3] = { -1, -1, -1 };
+
+		for (int k = 0; k < M; k++)
+		{
+			float val = -1;
+			if (i >= k)
+			{
+				// prendo l'elemento (i,k)
+				val = Dist[(i * (i + 1) / 2) + k];
+			}
+			else
+			{
+				// prendo l'elemento (k,i): sfrutto la simmetria
+				val = Dist[(k * (k + 1) / 2) + i];
+			}
+
+			
+			if (val < min[0])
+			{
+				min[2] = min[1];
+				min[1] = min[0];
+				min[0] = val;
+
+				kMin[2] = kMin[1];
+				kMin[1] = kMin[0];
+				kMin[0] = k;
+			}
+			else if (val < min[1])
+			{
+				min[2] = min[1];
+				min[1] = val;
+
+				kMin[2] = kMin[1];
+				kMin[1] = k;
+			}
+			else if (val < min[2])
+			{
+				min[2] = val;
+				kMin[2] = k;
+			}
+		}
+		indiciBest[i * 3 + 0] = kMin[0];
+		indiciBest[i * 3 + 1] = kMin[1];
+		indiciBest[i * 3 + 2] = kMin[2];
+	}
+}
 
 
 
@@ -714,7 +856,7 @@ bool CudaMatrix<T>::linearCombination(const CudaMatrix<T>& other, const float al
 
 
 template <class T>
-bool CudaMatrix<T>::computeSelfDistances(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest)
+bool CudaMatrix<T>::computeSelfDistancesNonSimm(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest)
 {
 	if (!Dist.isDataOwned() || !indiciBest.isDataOwned())
 	{
@@ -844,6 +986,142 @@ bool CudaMatrix<T>::computeSelfDistances(CudaMatrix<float>& Dist, CudaMatrix<uns
 }
 
 
+
+
+template <class T>
+bool CudaMatrix<T>::computeSelfDistances(CudaMatrixSimmetric<float>& Dist, CudaMatrix<unsigned int>& indiciBest)
+{
+	if (!Dist.isDataOwned() || !indiciBest.isDataOwned())
+	{
+		cout << "errore, l'oggetto in cui deve essere salvato il risultato è stato costruito con un buffer di dati esterno. " << endl <<
+			"Per evitare leak di risorse l'oggetto in cui salvare il risultato deve essere creato senza dati esterni." << endl;
+
+		return false;
+	}
+
+	T* d_A;
+	float* d_Dist;
+	unsigned int* d_indiciBest;
+
+
+	// alloco la memoria su device
+	cudaError_t cudaStatus = cudaMalloc((void **)&d_A, sizeof(T) * rows * cols);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita l'allocazione sul device della matrice A" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	// alloco lo spazio per una matrice simmetrica
+	cudaStatus = cudaMalloc((void **)&d_Dist, sizeof(float) * ((rows * (rows + 1)) / 2));
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita l'allocazione sul device della matrice Dist" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	cudaStatus = cudaMalloc((void **)&d_indiciBest, sizeof(unsigned int) * rows * 3);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita l'allocazione sul device della matrice indiciBest" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+
+	// copio i dati su device
+	cudaStatus = cudaMemcpy((void *)d_A, this->getData(), sizeof(T) * rows * cols, cudaMemcpyHostToDevice);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la copia della matrice A sul device" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+
+	// chiamo il kernel
+	// ************************************************************************************
+
+	int dimBlocco = 32;
+	dim3 threadsPerBlock(dimBlocco, dimBlocco);
+	int dimGriglia = ceil((float)rows / dimBlocco);
+	dim3 blocksPerGrid(dimGriglia, dimGriglia);
+
+
+	selfDistSharedSimmetric << <blocksPerGrid, threadsPerBlock >> > (d_A, d_Dist, rows, cols);
+
+	cudaStatus = cudaGetLastError();
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "il kernel Dist ha fallito l'esecuzione" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	dim3 threadsPerBlock1d(dimBlocco, 1);
+	dim3 blocksPerGrid1d(dimGriglia, 1);
+
+	cudaFindDistBest3Simmetric << <blocksPerGrid1d, threadsPerBlock1d >> > (d_Dist, d_indiciBest, rows);
+
+	cudaStatus = cudaGetLastError();
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "il kernel findDist3 ha fallito l'esecuzione" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+
+	// copio il risultato dal device all'host
+	Dist.setDimension(rows);
+	cudaStatus = cudaMemcpy(Dist.getData(), d_Dist, sizeof(float) * ((rows * (rows + 1)) / 2), cudaMemcpyDeviceToHost);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la copia di Dist dal device all'host" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	indiciBest.setDimension(rows, 3);
+	cudaStatus = cudaMemcpy(indiciBest.getData(), d_indiciBest, sizeof(unsigned int) * rows * 3, cudaMemcpyDeviceToHost);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la copia di indiciBest dal device all'host" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+
+	cudaStatus = cudaFree(d_A);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_A" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	cudaStatus = cudaFree(d_Dist);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_Dist" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+	cudaStatus = cudaFree(d_indiciBest);
+
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_indiciBest" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	return true;
+}
+
+
 template <class T>
 bool CudaMatrix<T>::computeSelfDistancesOld(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest)
 {
@@ -861,13 +1139,40 @@ bool CudaMatrix<T>::computeSelfDistancesOld(CudaMatrix<float>& Dist, CudaMatrix<
 	//unsigned int* d_numberOfDoneBlocks;	// ---------------------------
 
 	// alloco la memoria su device
-	cudaMalloc((void **)&d_A, sizeof(T) * rows * cols);
-	cudaMalloc((void **)&d_Dist, sizeof(float) * rows * rows);
-	cudaMalloc((void **)&d_indiciBest, sizeof(unsigned int) * rows * 3);
+	cudaError_t cudaStatus = cudaMalloc((void **)&d_A, sizeof(T) * rows * cols);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita l'allocazione sul device della matrice A" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	cudaStatus = cudaMalloc((void **)&d_Dist, sizeof(float) * rows * rows);
+	if(cudaStatus != cudaSuccess)
+	{
+		cout << "fallita l'allocazione sul device della matrice Dist" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	cudaStatus = cudaMalloc((void **)&d_indiciBest, sizeof(unsigned int) * rows * 3);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita l'allocazione sul device della matrice indiciBest" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
 	//cudaMalloc((void **)&d_numberOfDoneBlocks, sizeof(unsigned int) * rows);	// -----------------
 
 	// copio i dati su device
-	cudaMemcpy((void *)d_A, this->getData(), sizeof(T) * rows * cols, cudaMemcpyHostToDevice);
+	cudaStatus = cudaMemcpy((void *)d_A, this->getData(), sizeof(T) * rows * cols, cudaMemcpyHostToDevice);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la copia della matrice A sul device" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
 	//cudaMemset((void *)d_numberOfDoneBlocks, 0, sizeof(unsigned int) * rows);	// ------------------
 
 	// chiamo il kernel
@@ -881,18 +1186,45 @@ bool CudaMatrix<T>::computeSelfDistancesOld(CudaMatrix<float>& Dist, CudaMatrix<
 	//cudaMatrixSelfDist << <blocksPerGrid, threadsPerBlock >> > (d_A, d_Dist, d_indiciBest, rows, cols, d_numberOfDoneBlocks);	// -------------------
 	cudaMatrixSelfDist2 << <blocksPerGrid, threadsPerBlock >> > (d_A, d_Dist, rows, cols);
 
+	cudaStatus = cudaGetLastError();
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "il kernel Dist ha fallito l'esecuzione" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
 	dim3 threadsPerBlock1d(dimBlocco, 1);
 	dim3 blocksPerGrid1d(dimGriglia, 1);
 
 	cudaFindDistBest3 << <blocksPerGrid1d, threadsPerBlock1d >> > (d_Dist, d_indiciBest, rows);
 
+	cudaStatus = cudaGetLastError();
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "il kernel findDist3 ha fallito l'esecuzione" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
 
 	// copio il risultato dal device all'host
 	Dist.setDimension(rows, rows);
-	cudaMemcpy(Dist.getData(), d_Dist, sizeof(float) * rows * rows, cudaMemcpyDeviceToHost);
+	cudaStatus = cudaMemcpy(Dist.getData(), d_Dist, sizeof(float) * rows * rows, cudaMemcpyDeviceToHost);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la copia di Dist dal device all'host" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
 
 	indiciBest.setDimension(rows, 3);
-	cudaMemcpy(indiciBest.getData(), d_indiciBest, sizeof(unsigned int) * rows * 3, cudaMemcpyDeviceToHost);
+	cudaStatus = cudaMemcpy(indiciBest.getData(), d_indiciBest, sizeof(unsigned int) * rows * 3, cudaMemcpyDeviceToHost);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la copia di indiciBest dal device all'host" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
 
 
 	// ******** debug
@@ -902,9 +1234,29 @@ bool CudaMatrix<T>::computeSelfDistancesOld(CudaMatrix<float>& Dist, CudaMatrix<
 	// *************
 
 
-	cudaFree(d_A);
-	cudaFree(d_Dist);
-	cudaFree(d_indiciBest);
+	cudaStatus = cudaFree(d_A);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_A" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	cudaStatus = cudaFree(d_Dist);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_Dist" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
+
+	cudaStatus = cudaFree(d_indiciBest);
+	if (cudaStatus != cudaSuccess)
+	{
+		cout << "fallita la deallocazione sul device di d_indiciBest" << endl;
+		cout << string(cudaGetErrorString(cudaStatus)) << endl;
+		return false;
+	}
 	//cudaFree(d_numberOfDoneBlocks);	// ------------------------
 
 	return true;
