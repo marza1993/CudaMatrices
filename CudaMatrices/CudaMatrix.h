@@ -119,17 +119,11 @@ public:
 
 	bool difCPU(const CudaMatrix& other, CudaMatrix& result);
 
-	bool productOld(const CudaMatrix& other, CudaMatrix& result);
-
 	bool product(const CudaMatrix& other, CudaMatrix& result);
 
 	bool productCPU(const CudaMatrix& other, CudaMatrix& result);
 
 	bool linearCombination(const CudaMatrix& other, const float alpha, const float beta, CudaMatrix& result);
-
-	bool computeSelfDistancesOld(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest);
-
-	bool computeSelfDistancesNonSimm(CudaMatrix<float>& Dist, CudaMatrix<unsigned int>& indiciBest);
 
 	bool computeSelfDistances(CudaMatrixSimmetric<float>& Dist, CudaMatrix<unsigned int>& indiciBest);
 
