@@ -8,6 +8,7 @@
 
 using namespace std;
 
+// aggiunta lel da D:\\progetti\\
 
 //void provaDist()
 //{
