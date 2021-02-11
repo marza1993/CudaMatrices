@@ -596,17 +596,40 @@ bool CudaMatrix<T>::productCPU(const CudaMatrix<T>& other, CudaMatrix& result)
 	T* C = result.getData();
 	T* B = other.getData();
 
+	// più lento!!!!!!
+	//for (int i = 0; i < M; i++)
+	//{
+	//	for (int j = 0; j < H; j++)
+	//	{
+	//		C[i * H + j] = 0;
+	//		for (int k = 0; k < N; k++)
+	//		{
+	//			C[i * H + j] += data[i * N + k] * B[k * H + j];
+	//		}
+	//	}
+	//}
+
 	for (int i = 0; i < M; i++)
 	{
 		for (int j = 0; j < H; j++)
 		{
 			C[i * H + j] = 0;
-			for (int k = 0; k < N; k++)
+		}
+	}
+
+
+	for (int k = 0; k < N; k++)
+	{
+		for (int i = 0; i < M; i++)
+		{
+			for (int j = 0; j < H; j++)
 			{
 				C[i * H + j] += data[i * N + k] * B[k * H + j];
 			}
 		}
 	}
+
+
 	return true;
 }
 

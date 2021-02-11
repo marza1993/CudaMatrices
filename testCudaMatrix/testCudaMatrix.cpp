@@ -560,7 +560,7 @@ int main(int argc, char** argv)
 	//CudaMatrix<int>::printDeviceInfo();
 
 	//provaDist();
-	//provaMatMult();
+	provaMatMult();
 
 	//provaCicloSelfDist();
 
@@ -568,7 +568,7 @@ int main(int argc, char** argv)
 
 	//provaSimm();
 
-	provaCicloSelfDistSim();
+	//provaCicloSelfDistSim();
 
 	//provaDistSimm();
 
